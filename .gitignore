@@ -1,0 +1,5 @@
+/dist-newstyle/
+*~
+*.o
+*.hi
+*_stub.h
