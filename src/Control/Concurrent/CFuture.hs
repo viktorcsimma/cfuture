@@ -1,11 +1,11 @@
 -- | A Future type that is easy to represent and handle
 -- in C\/C++,
--- using two StablePtrs.
+-- using two 'MVar's.
 -- Moreover, it uses two new threads:
 -- one (the "watcher thread") aborts the calculation
--- if triggered by filling the first MVar.
+-- if triggered by filling the first 'MVar'.
 module Control.Concurrent.CFuture
-  (Future, CFuturePtr,
+  (Future, FutureResult, CFuturePtr,
    forkFuture, writeFutureC, forkFutureC,
    safeGet, get, getC, waitC, abort)
   where
@@ -23,7 +23,7 @@ import BasePrelude (PrimMVar, newStablePtrPrimMVar,
 -- if the Future has been aborted.
 type FutureResult a = Either SomeException a
 
--- | A C pointer to a C array of two StablePtrs.
+-- | A C pointer to a C array of two 'StablePtr's.
 type CFuturePtr = Ptr (StablePtr PrimMVar)
 
 -- | A type similar to C++ futures,
@@ -33,23 +33,22 @@ type CFuturePtr = Ptr (StablePtr PrimMVar)
 --
 -- From within Haskell, you can use
 -- 'forkFuture' to start a calculation,
--- 'wait' or 'get' to wait on it
+-- 'safeGet' or 'get' to wait on it
 -- and 'abort' to abort it.
 --
 -- From C, interruption happens
--- via calling 'hs_try_putmvar'
--- on the first MVar;
--- freeing the StablePtrs is possible
--- via 'hs_free_stable_ptr' --
+-- via calling hs_try_putmvar
+-- on the first 'StablePtr';
+-- freeing the pointers is possible
+-- via hs_free_stable_ptr --
 -- all these without the cost of an FFI call.
---
 
 data Future a = MkFuture 
   (MVar ())                -- interruption: fill it to interrupt the calculation
   (MVar (FutureResult a))  -- result:       where the result or the exception will be put
 
 -- | Starts an asynchronous calculation
--- and returns a Future to it.
+-- and returns a 'Future' to it.
 forkFuture :: IO a -> IO (Future a)
 forkFuture action = do
   intMVar <- (newEmptyMVar :: IO (MVar ()))
@@ -68,24 +67,23 @@ forkFuture action = do
 
   return $ MkFuture intMVar resMVar
 
--- | Interrupts the calculation behind the Future.
+-- | Interrupts the calculation behind the 'Future'.
 -- Do not call this from C;
--- use 'hs_try_putmvar' instead
--- (that frees the first MVar, too).
--- Returns False if it has already been interrupted
--- and True otherwise.
+-- use hs_try_putmvar instead
+-- (that frees the first 'MVar', too).
+-- Returns 'False' if it has already been interrupted
+-- and 'True' otherwise.
 abort :: Future a -> IO Bool
 abort (MkFuture intMVar _) = tryPutMVar intMVar ()
 
--- | Creates StablePtrs
+-- | Creates 'StablePtr's
 -- and writes them to a memory area
 -- provided by a C caller.
 -- Use this in functions where the C frontend provides
--- a CFuturePtr to write the future to.
+-- a 'CFuturePtr' to write the future to.
 --
 -- Note: it is the responsibility of the C side
--- to free the StablePtrs,
--- either with .
+-- to free the 'StablePtr's.
 writeFutureC :: CFuturePtr -> Future a -> IO ()
 writeFutureC ptr (MkFuture intMVar resMVar) = do
   intMVarSPtr <- newStablePtrPrimMVar intMVar
@@ -95,28 +93,28 @@ writeFutureC ptr (MkFuture intMVar resMVar) = do
   pokeElemOff (castPtr convPtr) 1 resMVarSPtr
 
 -- | Similar to 'forkFuture', but
--- we write the Future into a location
+-- we write the 'Future' into a location
 -- given by the caller.
 -- This makes it easier to create C exports
 -- for actions.
 --
 -- Use this in functions where the C frontend provides
--- a CFuturePtr to write the future to.
+-- a 'CFuturePtr' to write the future to.
 --
 -- Note: it is the responsibility of the C side
--- to free the StablePtrs.
+-- to free the 'StablePtr's.
 forkFutureC :: IO a -> CFuturePtr -> IO ()
 forkFutureC action ptr = writeFutureC ptr =<< forkFuture action
 
--- | Reads the result from the Future
+-- | Reads the result from the 'Future'
 -- but does not check whether there has been an exception
--- wrapped into a Left.
+-- wrapped into a 'Left'.
 -- This is a blocking call,
 -- waiting for the result until it is ready.
 safeGet :: Future a -> IO (FutureResult a)
 safeGet (MkFuture _ resMVar) = readMVar resMVar
 
--- | Similar to 'wait', but checks whether we have an exception
+-- | Similar to 'safeGet', but checks whether we have an exception
 -- and rethrows it if yes;
 -- returning the plain result otherwise.
 -- This is a blocking call,
@@ -129,8 +127,8 @@ get future = safeGet future >>= either throw return
 -- defined by the pointer.
 -- If there is an exception instead of a result,
 -- it writes nothing to the pointer
--- and returns false;
--- on success, it returns true.
+-- and returns 'False';
+-- on success, it returns 'True'.
 getC :: Storable a => CFuturePtr -> Ptr a -> IO Bool
 getC futurePtr destPtr = do
   -- we assume both StablePtrs are of the same size
@@ -143,7 +141,7 @@ getC futurePtr destPtr = do
     _       -> return False
 
 -- | Only waits until the calculation gets finished;
--- then returns True if it was successful and False otherwise.
+-- then returns 'True' if it was successful and 'False' otherwise.
 -- To be called from C.
 waitC :: CFuturePtr -> IO Bool
 waitC ptr = do

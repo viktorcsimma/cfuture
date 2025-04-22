@@ -1,4 +1,9 @@
 /dist-newstyle/
+/build/
+/cache/
+/packagedb/
+/tmp/
+/cfuture-1.*-docs.tar.gz
 *~
 *.o
 *.hi
